@@ -16,3 +16,4 @@ contract HoneyPot {
         throw;
     }
 }
+
