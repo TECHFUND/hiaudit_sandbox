@@ -1,3 +1,4 @@
+
 contract HoneyPot {
     mapping (address => uint) public balances;
     function HoneyPot() payable {
@@ -16,4 +17,5 @@ contract HoneyPot {
         throw;
     }
 }
+
 
