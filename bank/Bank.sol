@@ -30,4 +30,3 @@ contract Private_Bank {
 
     function() public payable {}
 }
-
