@@ -1,0 +1,99 @@
+Summary
+• Critical: 0 • High: 0
+• Medium: 0 • Low: 6
+• Informational/Gas Optimization: 2
+1. Low: Centralization Risk in pause and unpause
+• Location: pause and unpause functions (lines 109-119)
+Skin.sol
+Card.sol
+• Issue: The pause function can be called by an account with the OPERATOR_ROLE, and the unpause function can be called by an account with the DEFAULT_ADMIN_ROLE. If these roles are held by a single entity, it could result in centralization, where a single point of failure could potentially disable the entire contract.
+• Recommendation: Consider introducing a multi-signature mechanism or implementing a time lock to reduce centralization risks.
+function pause() public virtual onlyRole(OPERATOR_ROLE) {
+    _pause();
+}
+function unpause() public virtual onlyRole(DEFAULT_ADMIN_ROLE) {
+    _unpause();
+}
+
+Not to be fixed
+These roles are granted to specific addresses and their secret keys are securely stored.
+
+
+2. Informational: Lacking ReentrancyGuard
+• Location : Project recommendation
+• Recommendation: Implement ReentrancyGuard from OpenZepplin to
+prevent reentrancy attacks. Although there is no critical issue but we highly suggest using ReentrancyGuard.
+
+Not to be fixed
+The possibility of reentrancy occurring is very low because the functions require a specific role.
+
+3. Low: Potential Gas Optimization in unbounded loops
+• Location:
+bulkMint function (lines 81-88) Skin.sol
+cardReward, packSetOpen, and packSetPurchase functions (multiple lo- cations) NftSender.sol
+1
+ 
+synthesize and synthesizeWithFee functions (lines 60-85, 88-118)
+bulkRegister function (lines 60-68)
+• Issue: The loops in these functions could be optimized for gas eﬀiciency
+by reducing state updates or combining operations where possible.
+• Recommendation: Consider batching operations in these cases by fol- lowing a “from index” and “to index” pattern with upper limit on the array size.
+function bulkMint(
+    address to,
+    TokenIdWithMetadata[] calldata units
+) public onlyRole(OPERATOR_ROLE) {
+    for (uint256 i = 0; i < units.length; ) {
+        mint(to, units[i].tokenId, units[i].uri);
+        unchecked {
+i++; }
+} }
+
+Not to be fixed
+The number of NFTs being minted is limited because the functions require a specific role.
+
+4. Low: Lack of Validation for ERC20 Contract Address
+• Location:
+initialize, setFtContract functions (lines 18-26, 33-40) FtSender.sol
+setFtsenderContract function (lines 51-56) CardSynthesizer.sol
+• Issue: The contract does not validate the ERC20 token contract address provided during initialization or when setting a new contract. This could lead to potential errors or vulnerabilities if an incorrect or malicious ad- dress is passed.
+• Recommendation:
+Add validation for _ft address. Validate _ftSender.
+
+Not to be fixed
+That function is rarely called, and we will check if the address is correct after it is called.
+
+
+5. Low: Consider immutable Keyword for Contract Addresses
+• Location: card and ftSender variables (lines 9-10)
+• Issue: The contract addresses are stored as state variables, but if they
+are set only once during initialization and do not change afterward, they
+could be declared as immutable to save on gas costs.
+• Recommendation: Use immutable for contract addresses if they are set
+once and do not change.
+2
+
+ICard private immutable card;
+IFtSender private immutable ftSender;
+
+Not to be fixed.
+The addresses could be changed.
+
+6. Informational: Improve Error Messages
+• Location: synthesize and synthesizeWithFee functions (lines 67-71, 100-104)
+• Issue: The error messages in the require statements are generic. More descriptive error messages would make debugging and error handling easier.
+• Recommendation: Improve the error messages to provide more context about the specific failure.
+require(
+    card.ownerOf(baseCardTokenIds[i]) == to,
+    "Address does not own the specified base card"
+);
+
+To be fixed
+
+
+7. Low: Duplicate Hash Calculation in register and update Functions
+• Location: register and update functions (lines 39-48, 75-83)
+• Issue: The register and update functions calculate the keccak256 hash
+of the cardId twice, resulting in unnecessary gas consumption.
+• Recommendation: Store the cardIdHash in a local variable and reuse
+it to save gas.
+bytes32 cardIdHash = keccak256(bytes(cardId));
