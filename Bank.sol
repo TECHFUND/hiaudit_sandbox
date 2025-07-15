@@ -1,3 +1,6 @@
+import './Deps/Log.sol';
+
+
 contract Private_Bank {
     mapping(address => uint256) public balances;
 
