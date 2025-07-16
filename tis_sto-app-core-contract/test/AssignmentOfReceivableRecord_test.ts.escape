@@ -1,0 +1,232 @@
+import '@nomiclabs/hardhat-ethers';
+import { ethers } from 'hardhat';
+import { expect, assert } from 'chai';
+import { loadFixture, reset } from '@nomicfoundation/hardhat-network-helpers';
+
+import type { AssignmentOfReceivableRecord } from '../typechain-types/contracts/biz/AssignmentOfReceivableRecord';
+
+const TX_SUCCESS = 0x1; // receipt.statusの正常終了判定用定数
+
+// AssignmentOfReceivableRecord.solのデプロイ
+async function deployContracts() {
+    const [owner, aliceWallet, bobWallet, charlieWallet, davidWallet, erinWallet, frankWallet, tmpAddress] = await ethers.getSigners();
+
+    const assignmentOfReceivableRecordFactory = await ethers.getContractFactory('AssignmentOfReceivableRecord');
+    const assignmentOfReceivableRecordContract = await assignmentOfReceivableRecordFactory.deploy();
+    await assignmentOfReceivableRecordContract.deployed();
+
+    return {
+        owner,
+        aliceWallet,
+        bobWallet,
+        charlieWallet,
+        davidWallet,
+        erinWallet,
+        frankWallet,
+        tmpAddress,
+        assignmentOfReceivableRecordContract
+    };
+}
+
+// ERC3643動作環境のセットアップ＋AssignmentOfReceivableRecord.solのセットアップ（デプロイ＋初期処理）
+async function setupContracts() {
+    const { owner, aliceWallet, bobWallet, charlieWallet, davidWallet, erinWallet, frankWallet, tmpAddress, assignmentOfReceivableRecordContract } = await loadFixture(deployContracts);
+
+    // 初期処理（initialize, setTrexGateway, TREXGateway#addDeployer）
+    await (await assignmentOfReceivableRecordContract.initialize()).wait();
+
+    return {
+        owner,
+        aliceWallet,
+        bobWallet,
+        charlieWallet,
+        davidWallet,
+        erinWallet,
+        frankWallet,
+        tmpAddress,
+        assignmentOfReceivableRecordContract
+    };
+}
+
+// 債権譲渡通知・承諾日時登録テスト
+describe('[AssignmentOfReceivableRecord_test]', function () {
+
+    before(async function() {
+        await reset();
+        const { owner, aliceWallet, bobWallet, charlieWallet, davidWallet, erinWallet, frankWallet, tmpAddress, assignmentOfReceivableRecordContract } = await loadFixture(deployContracts);
+
+        // デプロイ先のアドレス情報出力
+        console.log(`-------------------------------------------------------------------------`);
+        console.log(`Deployed Address`);
+        console.log(`-------------------------------------------------------------------------`);
+        console.log(`                     Owner(deployer) address: ${owner.address}`);
+        console.log(`                         aliceWallet address: ${aliceWallet.address}`);
+        console.log(`                           bobWallet address: ${bobWallet.address}`);
+        console.log(`                       charlieWallet address: ${charlieWallet.address}`);
+        console.log(`                         davidWallet address: ${davidWallet.address}`);
+        console.log(`                          TmpAddress address: ${tmpAddress.address}`);
+        console.log(`AssignmentOfReceivableRecordContract address: ${assignmentOfReceivableRecordContract.address}`);
+        console.log(`-------------------------------------------------------------------------`);
+    });
+
+    // コントラクト初期化
+    describe('AssignmentOfReceivableRecord#initialize', function () {
+
+        // [正常系] コントラクト初期化
+        it('[NORMAL]initialize success', async function () {
+
+            const { owner, aliceWallet, bobWallet, charlieWallet, davidWallet, erinWallet, frankWallet, tmpAddress, assignmentOfReceivableRecordContract } = await loadFixture(deployContracts);
+
+            // initialize を確認
+            const receipt  = await (await assignmentOfReceivableRecordContract.initialize()).wait();
+            expect(receipt.status).to.equal(TX_SUCCESS);
+
+            // Initializedイベントを確認（バージョン：1）
+            const eventInitialized = receipt.events?.find(e => e.event === 'Initialized');
+            if (!eventInitialized?.args) {
+                console.log('Initialized イベントが発行されませんでした。');
+                assert.fail();
+            }
+            expect(eventInitialized.args.version).to.equal(1);
+
+            // OwnershipTransferredイベントを確認
+            const eventOwnershipTransferred = receipt.events?.find(e => e.event === 'OwnershipTransferred');
+            if (!eventOwnershipTransferred?.args) {
+                console.log('OwnershipTransferred イベントが発行されませんでした。');
+                assert.fail();
+            }
+            expect(eventOwnershipTransferred.args.previousOwner).to.equal(ethers.constants.AddressZero);
+            expect(eventOwnershipTransferred.args.newOwner).to.equal(owner.address);
+
+            // 親コントラクト（AbstractUpgradeable）のview関数を確認
+            expect(await assignmentOfReceivableRecordContract.paused()).to.equal(false);
+            expect(await assignmentOfReceivableRecordContract.owner()).to.equal(owner.address);
+        });
+
+        // [異常系] コントラクト初期化（二重実行）
+        it('[ERROR]initialize failure(duplicated run)', async function () {
+            const { owner, aliceWallet, bobWallet, charlieWallet, davidWallet, erinWallet, frankWallet, tmpAddress, assignmentOfReceivableRecordContract } = await loadFixture(deployContracts);
+
+            // initialize（初回）を確認
+            const receipt  = await (await assignmentOfReceivableRecordContract.initialize()).wait();
+            expect(receipt.status).to.equal(TX_SUCCESS);
+
+            // initialize（owner以外から実行）の挙動を確認
+            try {
+                // tx.wait() より前にエラーとなること
+                await assignmentOfReceivableRecordContract.connect(aliceWallet).initialize({ gasLimit: 6000000 });
+                assert.fail();
+            } catch (error: any) {
+                // initializerのエラー文言の取得可否が不安定なため、`どちらかの文言が存在すること`で確認
+                // expect(error.message).to.include('Initializable: contract is already initialized');
+                const expectedMessages = [
+                    'Initializable: contract is already initialized', // 本来の文言
+                    'Transaction reverted and Hardhat couldn\'t infer the reason.' // 不安定時の文言
+                ];
+                assert(
+                    expectedMessages.some(msg => error.message.includes(msg)),
+                    `Error messages must include one of the following: ${expectedMessages.join(' | ')}`
+                );
+            }
+        });
+        
+    });
+
+    // 債権譲渡通知・承諾日時登録
+    describe('AssignmentOfReceivableRecord#setRecord', function () {
+
+        // [正常系] 債権譲渡通知・承諾日時登録（1回）
+        it('[NORMAL]release success', async function () {
+
+            const { owner, aliceWallet, bobWallet, charlieWallet, davidWallet, erinWallet, frankWallet, tmpAddress, assignmentOfReceivableRecordContract } = await loadFixture(setupContracts);
+
+            // イベントを取得できることを確認
+            const tx = await assignmentOfReceivableRecordContract.setRecord('ID1', stContractAddres, fro, to);
+            // console.log(tx);
+
+            const receipt = await tx.wait();
+            // console.log(receipt);
+
+            // AssignmentOfReceivableRecorddイベントを確認
+            const eventAssignmentOfReceivableRecordd = receipt.events?.find(e => e.event === 'AssignmentOfReceivableRecordd');
+            if (!(eventAssignmentOfReceivableRecordd?.args)) {
+                console.log('AssignmentOfReceivableRecordd イベントが発行されませんでした。');
+                assert.fail();
+            }
+
+            // デプロイされたTokenの確認
+            expect(eventAssignmentOfReceivableRecordd.args.length).to.equal(3);
+            expect(eventAssignmentOfReceivableRecordd.args[2]).to.not.equal(ethers.constants.AddressZero);
+            const tokenContract = await ethers.getContractAt('IToken', eventAssignmentOfReceivableRecordd.args[2]);
+            expect(await tokenContract.decimals()).to.equal(18);
+            expect(await tokenContract.name()).to.equal('TEST_SYMBOL');
+            expect(await tokenContract.onchainID()).to.equal(aliceWallet.address);
+            expect(await tokenContract.symbol()).to.equal('TEST_SYMBOL');
+
+            expect(await tokenContract.paused()).to.equal(true); // STO発行前のためtrue
+            expect(await tokenContract.isFrozen(owner.address)).to.equal(false);
+            expect(await tokenContract.isFrozen(aliceWallet.address)).to.equal(false);
+            expect(await tokenContract.isFrozen(tmpAddress.address)).to.equal(false);
+        });
+
+        // [正常系] 債権譲渡通知・承諾日時登録（複数回）
+        it('[NORMAL]release success(multiple)', async function () {
+            const { owner, aliceWallet, bobWallet, charlieWallet, davidWallet, erinWallet, frankWallet, tmpAddress, assignmentOfReceivableRecordContract } = await loadFixture(setupContracts);
+
+            let identityRegistryStorageAddress = '';
+            let tokenAddresses: string[] = [];
+            for (const param of assignmentOfReceivableRecordParams) {
+
+                // イベントを取得できることを確認
+                const receipt = await(await assignmentOfReceivableRecordContract.setRecord(param)).wait();
+
+                // AssignmentOfReceivableRecorddイベントを確認
+                const eventAssignmentOfReceivableRecordd = receipt.events?.find(e => e.event === 'AssignmentOfReceivableRecordd');
+                if (!eventAssignmentOfReceivableRecordd?.args) {
+                    console.log('AssignmentOfReceivableRecordd イベントが発行されませんでした。');
+                    assert.fail();
+                }
+
+                // デプロイされたTokenの確認
+                expect(eventAssignmentOfReceivableRecordd.args[2]).to.not.equal(ethers.constants.AddressZero);
+                const tokenContract = await ethers.getContractAt('IToken', eventAssignmentOfReceivableRecordd.args[2]);
+                tokenAddresses.push(eventAssignmentOfReceivableRecordd.args[2]);
+                expect(await tokenContract.decimals()).to.equal(18);
+                expect(await tokenContract.name()).to.equal(param.symbol);
+                expect(await tokenContract.onchainID()).to.equal(param.aliceWallet);
+                expect(await tokenContract.symbol()).to.equal(param.symbol);
+
+                expect(await tokenContract.paused()).to.equal(true); // ST初期化前のステータス
+                expect(await tokenContract.isFrozen(owner.address)).to.equal(false);
+                expect(await tokenContract.isFrozen(aliceWallet.address)).to.equal(false);
+                expect(await tokenContract.isFrozen(tmpAddress.address)).to.equal(false);
+
+                // デプロイされたIdentityRegistryStorageの確認
+                expect(eventAssignmentOfReceivableRecordd.args[3]).to.not.equal(ethers.constants.AddressZero);
+                if (identityRegistryStorageAddress == '') {
+                    identityRegistryStorageAddress = eventAssignmentOfReceivableRecordd.args[3];
+                } else {
+                    expect(identityRegistryStorageAddress).to.equal(eventAssignmentOfReceivableRecordd.args[3]);
+                }
+            }
+        });
+
+        // [異常系] 債権譲渡通知・承諾日時登録（重複登録）
+        it('[ERROR]release failure(duplicated symbol)', async function () {
+            const { owner, aliceWallet, bobWallet, charlieWallet, davidWallet, erinWallet, frankWallet, tmpAddress, assignmentOfReceivableRecordContract } = await loadFixture(setupContracts);
+
+            // 1度目は正常、2度目で異常終了
+            expect((await (await assignmentOfReceivableRecordContract.setRecord(
+                
+            )).wait()).status).to.equal(TX_SUCCESS);
+
+            // 異常終了確認
+            try {
+                await assignmentOfReceivableRecordContract.setRecord(assignmentOfReceivableRecordParams);
+                assert.fail();
+            } catch (error: any) {
+                expect(error.message).to.include('token already deployed');
+            }
+        });
+    });
+});

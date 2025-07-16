@@ -1,0 +1,45 @@
+{
+  "name": "sto-app-core-contract",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Block Chain Core Smart Contracts",
+  "author": "TIS Inc.",
+  "scripts": {
+    "deploy": "npx hardhat run scripts/deploy.ts --network avacloud",
+    "typechain": "npx hardhat typechain",
+    "test": "npx hardhat test",
+    "solhint": "npx solhint 'contracts/**/*.sol'",
+    "prettier": "prettier --write \"contracts/**/*.sol\" --plugin=prettier-plugin-solidity"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-network-helpers": "^1.0.9",
+    "@nomiclabs/hardhat-ethers": "^2.0.0",
+    "@nomiclabs/hardhat-waffle": "^2.0.6",
+    "@onchain-id/solidity": "^2.0.0",
+    "@openzeppelin/hardhat-upgrades": "^1.28.0",
+    "@typechain/ethers-v5": "^10.2.1",
+    "@typechain/hardhat": "^6.1.2",
+    "@types/chai": "^4.3.11",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "^20.10.4",
+    "chai": "^4.3.10",
+    "dotenv": "^16.3.1",
+    "ethereum-waffle": "^4.0.10",
+    "ethers": "^5.7.2",
+    "hardhat": "^2.19.2",
+    "hardhat-gas-reporter": "^1.0.9",
+    "prettier": "^3.1.1",
+    "prettier-plugin-solidity": "^1.2.0",
+    "solhint": "^5.0.3",
+    "ts-node": "^10.9.2",
+    "typechain": "^8.3.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^4.8.3",
+    "@openzeppelin/contracts-upgradeable": "^4.8.3",
+    "@tokenysolutions/t-rex": "^4.1.4",
+    "dotenv": "^8.0.0",
+    "solady": "^0.0.265"
+  }
+}

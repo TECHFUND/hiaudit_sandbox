@@ -1,0 +1,318 @@
+import '@nomiclabs/hardhat-ethers';
+import { ethers } from 'hardhat';
+import { expect, assert } from 'chai';
+import { loadFixture, reset } from '@nomicfoundation/hardhat-network-helpers';
+
+//import * from '../typechain-types/@tokenysolutions/t-rex/contracts/factory/ITREXGateway';
+import { deployFullSuiteFixture } from './fixtures/deploy-full-suite.fixture';
+import type { StRelease } from '../typechain-types/contracts/biz/StRelease';
+type StReleaseParams = StRelease.StReleaseParamsStruct;
+
+const TX_SUCCESS = 0x1; // receipt.statusの正常終了判定用定数
+// TODO:untested
+// StTransfer.solのデプロイ
+async function deployContracts() {
+    const [owner, spcAddress, tmpAddress] = await ethers.getSigners(); // 最大20アドレス
+
+    const stReleaseFactory = await ethers.getContractFactory('StRelease');
+    const stReleaseContract = await stReleaseFactory.deploy();
+    await stReleaseContract.deployed();
+
+    return {
+      owner,
+      spcAddress,
+      tmpAddress,
+      stReleaseContract
+    };
+}
+
+// ERC3643動作環境のセットアップ＋StRelease.solのセットアップ（デプロイ＋初期処理）
+async function setupContracts() {
+    const { owner, spcAddress, tmpAddress, stReleaseContract } = await loadFixture(deployContracts);
+    const context = await loadFixture(deployFullSuiteFixture); // ERC3643動作環境のセットアップ
+
+    // 初期処理（initialize, setAddress, TREXGateway#addDeployer）
+    await (await stReleaseContract.initialize()).wait();
+    await (await stReleaseContract.setAddress('TrexGateway', context.suite.trexGatewayContract.address)).wait();
+    await (await context.suite.trexGatewayContract.addDeployer(stReleaseContract.address)).wait();
+
+    return {
+        owner,
+        spcAddress,
+        tmpAddress,
+        stReleaseContract,
+        context
+    };
+}
+
+describe('[StTransfer_test]', function () {
+
+    before(async function() {
+        await reset();
+        const { owner, spcAddress, tmpAddress, stReleaseContract, context } = await loadFixture(setupContracts);
+
+        // デプロイ先のアドレス情報出力
+        console.log(`------------------------------------------------------------`);
+        console.log(`Deployed Address`);
+        console.log(`------------------------------------------------------------`);
+        console.log(`             deployer address: ${context.accounts.deployer.address}`);
+        console.log(`          tokenIssuer address: ${context.accounts.tokenIssuer.address}`);
+        console.log(`           tokenAgent address: ${context.accounts.tokenAgent.address}`);
+        console.log(`           tokenAdmin address: ${context.accounts.tokenAdmin.address}`);
+        console.log(`          claimIssuer address: ${context.accounts.claimIssuer.address}`);
+        console.log(`claimIssuerSigningKey address: ${context.accounts.claimIssuerSigningKey.address}`);
+        console.log(`        anotherWallet address: ${context.accounts.anotherWallet.address}`);
+    
+        console.log(`                Owner address: ${owner.address}`);
+        console.log(`          AdminWallet address: ${spcAddress.address}`);
+        console.log(`           TmpAddress address: ${tmpAddress.address}`);
+        console.log(`    StReleaseContract address: ${stReleaseContract.address}`);
+        console.log(`------------------------------------------------------------`);
+    });
+
+    // コントラクト初期化
+    describe('StTransfer#initialize', function () {
+
+        // [正常系] コントラクト初期化
+        it('[NORMAL]initialize success', async function () {
+
+            const { owner, spcAddress, tmpAddress, stReleaseContract } = await loadFixture(deployContracts);
+
+            // initialize を確認
+            const receipt  = await (await stReleaseContract.initialize()).wait();
+            expect(receipt.status).to.equal(TX_SUCCESS);
+
+            // Initializedイベントを確認（バージョン：1）
+            const eventInitialized = receipt.events?.find(e => e.event === 'Initialized');
+            if (!eventInitialized?.args) {
+                console.log('Initialized イベントが発行されませんでした。');
+                assert.fail();
+            }
+            expect(eventInitialized.args.version).to.equal(1);
+
+            // OwnershipTransferredイベントを確認
+            const eventOwnershipTransferred = receipt.events?.find(e => e.event === 'OwnershipTransferred');
+            if (!eventOwnershipTransferred?.args) {
+                console.log('OwnershipTransferred イベントが発行されませんでした。');
+                assert.fail();
+            }
+            expect(eventOwnershipTransferred.args.previousOwner).to.equal(ethers.constants.AddressZero);
+            expect(eventOwnershipTransferred.args.newOwner).to.equal(owner.address);
+        });
+    });
+
+    // アドレス設定
+    describe('StTransfer#setAddress', function () {
+
+        // [正常系] アドレス設定
+        it('[NORMAL]setAddress success', async function () {
+            const { owner, spcAddress, tmpAddress, stReleaseContract } = await loadFixture(deployContracts);
+            await (await stReleaseContract.initialize()).wait();
+
+            // setAddress を確認
+            expect((await (await stReleaseContract.setAddress('TrexGateway', tmpAddress.address)).wait()).status).to.equal(TX_SUCCESS);
+            expect((await (await stReleaseContract.setAddress('IdentityRegistryStorage', tmpAddress.address)).wait()).status).to.equal(TX_SUCCESS);
+        });
+
+        // [異常系] アドレス設定（address異常時:AddressZero）
+        it('[ERROR]setAddress failure(invalid address(0))', async function () {
+            const { owner, spcAddress, tmpAddress, stReleaseContract } = await loadFixture(deployContracts);
+            await (await stReleaseContract.initialize()).wait();
+
+            // setAddress address異常時の挙動を確認
+            try {
+                // tx.wait() より前にエラーとなること
+                await stReleaseContract.setAddress('TrexGateway', ethers.constants.AddressZero);
+                assert.fail();
+            } catch (error: any) {
+                expect(error.message).to.include('[StRelease#setAddress]invalid address(0)');
+            }
+        });
+
+        // [異常系] アドレス設定（ID異常時）
+        it('[ERROR]setAddress failure(invalid id)', async function () {
+            const { owner, spcAddress, tmpAddress, stReleaseContract } = await loadFixture(deployContracts);
+            await (await stReleaseContract.initialize()).wait();
+
+            // setAddress ID異常時の挙動を確認
+            try {
+                // tx.wait() より前にエラーとなること
+                await stReleaseContract.setAddress('INVALID', tmpAddress.address);
+                assert.fail();
+            } catch (error: any) {
+                expect(error.message).to.include('[StRelease#setAddress]invalid id: INVALID');
+            }
+        });
+
+        // [異常系] アドレス設定（権限エラー：owner以外から実行）
+        it('[ERROR]setAddress failure(not owner)', async function () {
+            const { owner, spcAddress, tmpAddress, stReleaseContract } = await loadFixture(deployContracts);
+            await (await stReleaseContract.initialize()).wait();
+
+            // setAddress（owner以外から実行）の挙動を確認
+            try {
+                // tx.wait() より前にエラーとなること
+                await stReleaseContract.connect(spcAddress).setAddress('TrexGateway', tmpAddress.address);
+                assert.fail();
+            } catch (error: any) {
+                expect(error.message).to.include('Ownable: caller is not the owner');
+            }
+        });
+    });
+
+    // ST公開
+    describe('StTransfer#main', function () {
+
+        // [正常系] ST公開（1回）
+        it('[NORMAL]main success', async function () {
+
+            const { owner, spcAddress, tmpAddress, stReleaseContract, context } = await loadFixture(setupContracts);
+
+            // 事前準備
+            const stReleaseParams: StReleaseParams = {
+                name: 'test_name', symbol: 'test_symbol', spcAddress: spcAddress.address
+            };
+
+            // イベントを取得できることを確認
+            const tx = await stReleaseContract.main(stReleaseParams);
+            // console.log(tx);
+
+            const receipt = await tx.wait();
+            // console.log(receipt);
+
+            // StReleasedイベントを確認
+            const eventStReleased = receipt.events?.find(e => e.event === 'StReleased');
+            if (!eventStReleased?.args) {
+                console.log('StReleased イベントが発行されませんでした。');
+                assert.fail();
+            }
+
+            // デプロイされたTokenの確認
+            expect(eventStReleased.args[2]).to.not.equal(ethers.constants.AddressZero);
+            const tokenContract = await ethers.getContractAt('IToken', eventStReleased.args[2]);
+            expect(await tokenContract.decimals()).to.equal(18);
+            expect(await tokenContract.name()).to.equal('TEST_NAME');
+            expect(await tokenContract.onchainID()).to.equal(spcAddress.address);
+            expect(await tokenContract.symbol()).to.equal('TEST_SYMBOL');
+
+            expect(await tokenContract.paused()).to.equal(true); // STO発行前のためtrue
+            expect(await tokenContract.isFrozen(owner.address)).to.equal(false);
+            expect(await tokenContract.isFrozen(spcAddress.address)).to.equal(false);
+            expect(await tokenContract.isFrozen(tmpAddress.address)).to.equal(false);
+
+            // デプロイされたIdentityRegistryStorageの確認
+            expect(eventStReleased.args[3]).to.not.equal(ethers.constants.AddressZero);
+
+            // SPC単位でのTokenアドレス取得を確認
+            const factoryAddress = await context.suite.trexGatewayContract.getFactory();
+            const factoryContract = await ethers.getContractAt('STLinkTREXFactory', factoryAddress);
+            const spcAddresses = await factoryContract.getSecurityTokens(spcAddress.address);
+            expect(await spcAddresses.length).to.equal(1);
+            expect(await spcAddresses[0]).to.equal(eventStReleased.args[2]);
+            // （存在しないSPCアドレスの場合は空配列になることの確認）
+            const tmpAddresses = await factoryContract.getSecurityTokens(tmpAddress.address);
+            expect(await tmpAddresses.length).to.equal(0);
+        });
+
+        // [正常系] ST公開（複数(3)回）
+        it('[NORMAL]main success(*3)', async function () {
+            const { owner, spcAddress, tmpAddress, stReleaseContract, context } = await loadFixture(setupContracts);
+
+            // 事前準備（2番目のSPCはtmpAddressとする）
+            const stReleaseParams: StReleaseParams[] = [
+                { name: 'TEST SYMBOL' , symbol: 'TEST_SYMBOL' , spcAddress: spcAddress.address },
+                { name: 'TEST SYMBOL2', symbol: 'TEST_SYMBOL2', spcAddress: tmpAddress.address },
+                { name: 'TEST SYMBOL3', symbol: 'TEST_SYMBOL3', spcAddress: spcAddress.address },
+            ];
+            let identityRegistryStorageAddress = '';
+            let tokenAddresses: string[] = [];
+            for (const param of stReleaseParams) {
+
+                // イベントを取得できることを確認
+                const receipt = await(await stReleaseContract.main(param)).wait();
+
+                // StReleasedイベントを確認
+                const eventStReleased = receipt.events?.find(e => e.event === 'StReleased');
+                if (!eventStReleased?.args) {
+                    console.log('StReleased イベントが発行されませんでした。');
+                    assert.fail();
+                }
+
+                // デプロイされたTokenの確認
+                expect(eventStReleased.args[2]).to.not.equal(ethers.constants.AddressZero);
+                const tokenContract = await ethers.getContractAt('IToken', eventStReleased.args[2]);
+                tokenAddresses.push(eventStReleased.args[2]);
+                expect(await tokenContract.decimals()).to.equal(18);
+                expect(await tokenContract.name()).to.equal(param.name);
+                expect(await tokenContract.onchainID()).to.equal(param.spcAddress);
+                expect(await tokenContract.symbol()).to.equal(param.symbol);
+
+                expect(await tokenContract.paused()).to.equal(true); // ST初期化前のステータス
+                expect(await tokenContract.isFrozen(owner.address)).to.equal(false);
+                expect(await tokenContract.isFrozen(spcAddress.address)).to.equal(false);
+                expect(await tokenContract.isFrozen(tmpAddress.address)).to.equal(false);
+
+                // デプロイされたIdentityRegistryStorageの確認
+                expect(eventStReleased.args[3]).to.not.equal(ethers.constants.AddressZero);
+                if (identityRegistryStorageAddress == '') {
+                    identityRegistryStorageAddress = eventStReleased.args[3];
+                } else {
+                    expect(identityRegistryStorageAddress).to.equal(eventStReleased.args[3]);
+                }
+            }
+            
+            // SPC単位でのTokenアドレス取得を確認
+            // 1,3番目のトークンは、SPCアドレスがspcAddressで登録されていること
+            const factoryAddress = await context.suite.trexGatewayContract.getFactory();
+            const factoryContract = await ethers.getContractAt('STLinkTREXFactory', factoryAddress);
+            const addressesOfSpcAddress = await factoryContract.getSecurityTokens(spcAddress.address);
+            expect(await addressesOfSpcAddress.length).to.equal(2);
+            expect(await addressesOfSpcAddress[0]).to.equal(tokenAddresses[0]);
+            expect(await addressesOfSpcAddress[1]).to.equal(tokenAddresses[2]);
+            // 2番目のトークンのみ、SPCアドレスがtmpAddressで登録されていること
+            const addressesOfTmpAddress = await factoryContract.getSecurityTokens(tmpAddress.address);
+            expect(await addressesOfTmpAddress.length).to.equal(1);
+            expect(await addressesOfTmpAddress[0]).to.equal(tokenAddresses[1]);
+        });
+
+        // [異常系] ST公開（setAddress無し）
+        it('[ERROR]main failure(without setAddress)', async function () {
+            const { owner, spcAddress, tmpAddress, stReleaseContract } = await loadFixture(deployContracts);
+            await (await stReleaseContract.initialize()).wait(); // setAddress無し
+
+            // 事前準備
+            const stReleaseParams: StReleaseParams = {
+                name: 'TEST SYMBOL', symbol: 'TEST_SYMBOL', spcAddress: spcAddress.address
+            };
+
+            // 異常終了確認
+            try {
+                await stReleaseContract.main(stReleaseParams);
+                assert.fail();
+            } catch (error: any) {
+                expect(error.message).to.include('TrexGateway address not set');
+            }
+        });
+
+        // [異常系] ST公開（シンボルの重複登録）
+        it('[ERROR]main failure(duplicated symbol)', async function () {
+            const { owner, spcAddress, tmpAddress, stReleaseContract, context } = await loadFixture(setupContracts);
+
+            // 事前準備
+            const stReleaseParams: StReleaseParams = {
+                name: 'TEST SYMBOL', symbol: 'TEST_SYMBOL', spcAddress: spcAddress.address
+            };
+
+            // 1度目は正常、2度目で異常終了
+            expect((await (await stReleaseContract.main(stReleaseParams)).wait()).status).to.equal(TX_SUCCESS);
+
+            // 異常終了確認
+            try {
+                await stReleaseContract.main(stReleaseParams);
+                assert.fail();
+            } catch (error: any) {
+                expect(error.message).to.include('token already deployed');
+            }
+        });
+    });
+});
